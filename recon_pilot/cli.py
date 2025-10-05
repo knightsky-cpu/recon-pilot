@@ -3,9 +3,10 @@ import typer
 from pathlib import Path
 from datetime import datetime, timezone
 from rich.console import Console
-from typing import Set
+from typing import Set, Optional
 from collections import Counter
 import json
+import re
 
 from .scope import Scope
 from .modules.ct import fetch_ct_domains
@@ -88,12 +89,49 @@ def _stamp() -> str:
 
 @app.command()
 def run(
-    scope: Path = typer.Option(..., exists=True, readable=True, help="Path to scope.yaml"),
+    scope: Optional[Path] = typer.Option(
+        None,
+        exists=False,
+        readable=False,
+        help="Path to scope.yaml (or use -i/--interactive to enter values)",
+    ),
     out: Path = typer.Option(Path("runs"), help="Output directory base"),
     tag: str = typer.Option("", help="Optional run tag, appended to run folder name"),
+    interactive: bool = typer.Option(False, "--interactive", "-i", help="Prompt for scope values (org, domains, seeds, resolvers)"),
 ):
     """Run passive recon against the defined scope."""
-    scope_obj = Scope.load(str(scope))
+    # Build Scope from prompts if interactive; otherwise load from YAML path.
+    if interactive:
+        org = typer.prompt("Organization", default="Local Lab")
+
+        domains_str = typer.prompt("Domain(s) (comma or space separated)", default="")
+        domains = [d.strip().lower() for d in re.split(r"[,\s]+", domains_str) if d.strip()]
+        if not domains:
+            typer.echo("No domains entered; aborting.")
+            raise typer.Exit(1)
+
+        seeds_str = typer.prompt("Seed host(s) (optional, comma/space separated)", default="")
+        seeds_hosts = [h.strip().lower() for h in re.split(r"[,\s]+", seeds_str) if h.strip()]
+
+        notes = typer.prompt("Notes (optional)", default="")
+        resolvers_str = typer.prompt("Resolvers (comma-separated)", default="1.1.1.1,8.8.8.8")
+        resolvers = [r.strip() for r in resolvers_str.split(",") if r.strip()]
+        passive = typer.confirm("Passive-only mode?", default=True)
+
+        scope_obj = Scope(
+            org=org,
+            domains=domains,
+            policy={"passive_only": passive},
+            notes=notes,
+            resolvers=resolvers,
+            seeds={"hosts": seeds_hosts},
+        )
+    else:
+        if scope is None:
+            typer.echo("Provide --scope PATH or use --interactive (-i) to build one.")
+            raise typer.Exit(2)
+        scope_obj = Scope.load(str(scope))
+
     run_dir = out / f"run-{_stamp()}{('-' + tag) if tag else ''}"
     artifacts_dir = run_dir / "artifacts"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -114,7 +152,7 @@ def run(
         write_json(artifacts_dir / f"ct_{base}.json", hosts)
         all_hosts.update(hosts)
 
-    # Include seed hosts from scope.yaml (filtered to in-scope)
+    # Include seed hosts from scope (filtered to in-scope)
     seed_hosts = {h.strip().lower() for h in scope_obj.seeds.get("hosts", []) if h.strip()}
     seed_hosts = {h for h in seed_hosts if scope_obj.in_scope_domain(h)}
     all_hosts.update(seed_hosts)

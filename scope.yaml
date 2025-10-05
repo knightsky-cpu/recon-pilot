@@ -1,0 +1,14 @@
+org: ReconPilot Lab
+domains:
+  - 127.0.0.1.sslip.io
+policy:
+  passive_only: true
+notes: Lab-only, authorized testing.
+resolvers:
+  - 1.1.1.1
+  - 8.8.8.8
+seeds:
+  hosts:
+    - lab.127.0.0.1.sslip.io
+    - api.127.0.0.1.sslip.io
+

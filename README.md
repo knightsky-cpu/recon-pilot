@@ -40,3 +40,18 @@ ls runs/*/casefile.md
 - HTTP header/tech fingerprint module
 - Integrations: Amass, Nuclei, Shodan/Censys (with user-provided keys)
 - HTML/PDF export and SARIF/STIX emitters
+
+## Disclaimer
+
+This project is a **passive-first reconnaissance helper** intended for **lawful security testing, research, and education**.
+
+- **Authorized use only.** Run this tool **only** against systems/domains you own or where you have **explicit written permission** from the owner.  
+- **You are responsible for your use.** Misuse may violate laws (e.g., computer misuse / anti-hacking statutes), contracts, or company policies.  
+- **No warranty.** This software is provided **“AS IS”** under the MIT License, **without warranties** of any kind. The maintainers and contributors are **not liable** for misuse, data loss, or damage resulting from use of this software.  
+- **Compliance.** You agree to comply with all applicable laws, regulations, and organizational policies. Consult your legal counsel for guidance—this is **not legal advice**.  
+- **Safety defaults.** v0 is **passive-only** (CT + DNS). Any future **active** features will be **opt-in** and require explicit approval; you must confirm authorization before enabling them.  
+- **Evidence handling.** Artifacts are stored locally by default. You are responsible for protecting any collected data and removing it when no longer authorized.
+
+By using this project, you acknowledge and agree to the above.
+
+➡️ **Read the full [DISCLAIMER & Acceptable Use](./DISCLAIMER.md).**

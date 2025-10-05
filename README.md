@@ -55,3 +55,9 @@ This project is a **passive-first reconnaissance helper** intended for **lawful 
 By using this project, you acknowledge and agree to the above.
 
 ➡️ **Read the full [DISCLAIMER & Acceptable Use](./DISCLAIMER.md).**
+
+## Community Note from the Maintainer
+
+I’m not a professional programmer or penetration tester—I’m a security-conscious enthusiast who cares about building safer systems. I develop and test ReconPilot in my own lab on self-hosted, containerized environments, and I do my best to follow sound security practices. v0 is intentionally **passive-only** by default.
+
+This project is an active work-in-progress. I’m sharing it in good faith with the community and I welcome feedback, issues, and PRs. If you spot risks, design flaws, or ways to improve signal-to-noise, please open an issue or propose a change. Let’s build something genuinely useful and safe together.

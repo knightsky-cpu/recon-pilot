@@ -1,7 +1,7 @@
 from __future__ import annotations
 import typer
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from rich.console import Console
 from typing import Set
 from collections import Counter
@@ -14,9 +14,11 @@ from .render import render_casefile, write_casefile_html
 from .rules_loader import load_rules
 from .utils import write_json, read_json
 
+
 def _list_runs(out_dir: Path):
-    """Return run directories like run-2025-10-05T11-22-33 (oldest→newest)."""
+    """Return run directories like run-YYYYMMDD-HHMMSSZ (oldest→newest)."""
     return sorted([p for p in out_dir.glob("run-*") if p.is_dir()])
+
 
 def _load_hosts(artifacts_dir: Path) -> Set[str]:
     """
@@ -41,6 +43,7 @@ def _load_hosts(artifacts_dir: Path) -> Set[str]:
                 return set(str(x).strip().lower() for x in v if str(x).strip())
     return set()
 
+
 def _compute_delta(current_artifacts: Path, out_dir: Path):
     """
     Compare the current run's hosts to the previous run in `out_dir`.
@@ -52,8 +55,6 @@ def _compute_delta(current_artifacts: Path, out_dir: Path):
       }
     """
     runs = _list_runs(out_dir)
-    # We expect current run to be the last one, but this function is called before
-    # we write the final report, so just look back one run from the end.
     if not runs or len(runs) < 2:
         return {
             "prev_run": None,
@@ -76,12 +77,14 @@ def _compute_delta(current_artifacts: Path, out_dir: Path):
         "removed_hosts": removed_hosts,
     }
 
-app = typer.Typer(help="ReconPilot v0 — Passive-first recon autopilot")
 
+app = typer.Typer(help="ReconPilot v0 — Passive-first recon autopilot")
 console = Console()
 
+
 def _stamp() -> str:
-    return datetime.utcnow().strftime("%Y%m%d-%H%M%SZ")
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+
 
 @app.command()
 def run(
@@ -132,8 +135,11 @@ def run(
     write_json(artifacts_dir / "dns_records.json", inventory)
     write_json(artifacts_dir / "dns_issues.json", dns_issues)
 
-    # 3) Findings: map to rules/explanations
-    rules = load_rules(Path(__file__).parent / "rules" / "recon_rules.yaml")
+    # 3) Findings: map to rules/explanations (with safe fallback)
+    try:
+        rules = load_rules(Path(__file__).parent / "rules" / "recon_rules.yaml")
+    except FileNotFoundError:
+        rules = {"findings": {}}
     findings = []
 
     # wildcard exposure hint (naive): if many subdomains for a base
@@ -183,7 +189,7 @@ def run(
     # 5) Render casefile (Markdown + HTML)
     context = {
         "org": scope_obj.org,
-        "run_time": datetime.utcnow().isoformat() + "Z",
+        "run_time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "scope_domains": scope_obj.domains,
         "stats": stats,
         "findings": findings,
@@ -210,6 +216,7 @@ def run(
     else:
         console.print(f"[bold]Δ:[/] first run — no prior data")
 
+
 @app.command()
 def diff(
     a: Path = typer.Option(..., exists=True, help="Path to older run dir"),
@@ -235,6 +242,7 @@ def diff(
         f.writelines(lines)
 
     console.print(f"[green]✔[/] Wrote diff → {out}")
+
 
 if __name__ == "__main__":
     app()

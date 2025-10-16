@@ -27,14 +27,15 @@ from .utils import write_json, read_json
 APP_HELP = """\
 ReconPilot Command Reference (dev-box edition)
 
-Run from the repo root and use `./recon` in all examples below. Only if you explicitly make it global (see the end of this help) can you omit the `./` prefix.
+Run from the repo root and use `./recon` in all examples below. Only if you explicitly
+make it global (see the end of this help) can you omit the `./` prefix.
 
 ──────────────────────────────── Core ────────────────────────────────
 • Health check
   ./recon doctor
 
 • Run (interactive prompts)
-  ./recon run -i --out runs --tag <label>
+  ./recon run -i --out runs --tag normal
 
 • Run (from a scope file)
   ./recon run --scope scope.yaml --out runs --tag <label>
@@ -42,7 +43,7 @@ Run from the repo root and use `./recon` in all examples below. Only if you expl
 • Diff two runs
   ./recon diff --a runs/run-OLD --b runs/run-NEW --out runs/diff.md
 
-──────────────────────── New Opt-In Flags (Speed & Visibility) ────────────────────────
+──────────────────── New Opt-In Flags (Speed & Visibility) ────────────────────
 • Verbose progress
   -v / --verbose — live spinner + periodic progress (heartbeats).
 
@@ -63,7 +64,7 @@ Tip: when you don’t use any speed flags, the CLI hints:
 • Normal (baseline, comprehensive)
   ./recon run -i --out runs --tag normal
 
-• Normal + visibility (no speed change)
+• Normal + visibility (adds heartbeats/spinner only)
   ./recon run -i -v --out runs --tag vis
 
 • DNS fast path + concurrency (keep everything in scope)
@@ -75,7 +76,7 @@ Tip: when you don’t use any speed flags, the CLI hints:
 • Scoped file + speed flags (skip prompts)
   ./recon run --scope scope.yaml -v --dns-fast --dns-workers 20 --out runs --tag scoped-fast
 
-────────────────────────── Opening Reports (Newest or Specific) ─────────────────────────
+──────────────────── Opening Reports (Newest or Specific) ──────────────────────
 • Open the newest HTML casefile — default browser (preferred)
   xdg-open "$(ls -td runs/* | head -1)/casefile.html"
 
@@ -93,7 +94,7 @@ Tip: when you don’t use any speed flags, the CLI hints:
   # artifacts folder:
   ls -lh "$RUN/artifacts"
 
-──────────────────────── Helpful “During Run” & Diagnostics ────────────────────────
+──────────────────── Helpful “During Run” & Diagnostics ────────────────────────
 • Watch newest run’s artifacts appear/grow
   watch -n 1 -d 'ls -lh "$(ls -td runs/* | head -1)"/artifacts'
 
@@ -101,21 +102,22 @@ Tip: when you don’t use any speed flags, the CLI hints:
   /usr/bin/time -f 'Elapsed: %E  CPU: %P  RSS: %M KB' ./recon run -i --out runs --tag bench
 
 • Measure DNS phase duration (newest run)
-  RUN="$(ls -td runs/* | head -1)"
-  CT_TS=$(stat -c %Y "$RUN/artifacts/ct_*.json" | head -1)
-  DNS_TS=$(stat -c %Y "$RUN/artifacts/dns_records.json")
+  RUN="$(ls -td runs/* | head -1)"; \
+  CT_TS=$(stat -c %Y $(printf "%s\\n" "$RUN"/artifacts/ct_*.json | head -1)); \
+  DNS_TS=$(stat -c %Y "$RUN"/artifacts/dns_records.json); \
   echo "$((DNS_TS-CT_TS)) seconds"
 
 • Diff two runs (what’s new/removed)
   ./recon diff --a runs/run-OLD --b runs/run-NEW --out runs/diff.md
   xdg-open runs/diff.md
 
-────────────────────── Make `recon` Globally Available (no `./`) ──────────────────────
+────────────────── Make `recon` Globally Available (no ./) ────────────────────
 This is optional, but a nice QoL improvement. After this, you can type `recon` from any directory.
 
 • Per-user symlink into ~/.local/bin (recommended)
   mkdir -p ~/.local/bin
   ln -sf "$(pwd)/recon" ~/.local/bin/recon
+
   # ensure ~/.local/bin is on PATH for your shell:
   grep -q 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc || \
     echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
@@ -140,6 +142,7 @@ Keep the symlink pointing at your dev-box repo. If you move the repo folder, upd
   returns 200.
 • DNS feels slow → try --dns-workers 20 and/or --dns-fast. Keep default for full coverage runs.
 """
+
 
 console = Console()
 

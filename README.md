@@ -28,6 +28,31 @@ recon-pilot run --scope scope.yaml --out runs
 # 5) Open your casefile
 ls runs/*/casefile.md
 ```
+## New Opt-In Flags (Speed & Visibility)
+
+These are **additive** features; defaults remain conservative (full DNS set, serial lookups). The CLI will print a hint, but you must **opt in**.
+
+- **Verbose progress**: `-v, --verbose`  
+  Shows a live spinner and periodic progress (heartbeats) during CT/DNS so you can see that the run is healthy.
+
+- **DNS fast path**: `--dns-fast`  
+  Resolves and stores only **A/AAAA** records. This reduces I/O and render time for large scopes. Use when you want quicker casefiles and don’t need MX/TXT/NS on first pass.
+
+- **Skip internal-looking hosts**: `--skip-internal`  
+  Excludes names that look internal (e.g., `*.corp.*`, `.internal`, `.local`, `.lan`). Good for public-exposure sweeps. (You can run a full pass later.)
+
+- **Parallel DNS workers**: `--dns-workers N`  
+  Runs DNS lookups in parallel (e.g., `10–50`). Start with `20` and tune for your network/ISP. Default is `0` (serial), which is slow but maximally conservative.
+
+> Tip: Combine `--dns-fast` + `--dns-workers` for big speedups; add `--skip-internal` for the fastest public-only sweep.
+
+### Ready-Made Recipes
+
+- **Baseline (comprehensive, default behavior)**  
+  ```bash
+  ./recon run -i --out runs --tag normal
+
+
 
 ## Safety & Ethics
 - **Passive-first**: v0 only queries public data sources and DNS. No active scanning.  

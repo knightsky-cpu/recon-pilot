@@ -38,7 +38,7 @@ make it global (see the end of this help) can you omit the `./` prefix.
   ./recon run -i --out runs --tag normal
 
 • Run (from a scope file)
-  ./recon run --scope scope.yaml --out runs --tag <label>
+  ./recon run --scope scope.yaml --out runs --tag LABEL
 
 • Diff two runs
   ./recon diff --a runs/run-OLD --b runs/run-NEW --out runs/diff.md

@@ -1,12 +1,20 @@
+# ReconPilot CLI — verbose mode, DNS fast path (opt-in), internal-host skipping (opt-in),
+# parallel DNS workers (opt-in), and a comprehensive --help that embeds the full
+# "ReconPilot Command Reference (dev-box edition)".
+
 from __future__ import annotations
-import typer
-from pathlib import Path
-from datetime import datetime, timezone
-from rich.console import Console
-from typing import Set, Optional
-from collections import Counter
+
+import logging
 import json
 import re
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, Set, Tuple, Dict, List
+
+import typer
+from rich.console import Console
 
 from .scope import Scope
 from .modules.ct import fetch_ct_domains
@@ -14,6 +22,129 @@ from .modules.dns import query_dns
 from .render import render_casefile, write_casefile_html
 from .rules_loader import load_rules
 from .utils import write_json, read_json
+
+
+APP_HELP = """\
+ReconPilot Command Reference (dev-box edition)
+
+Run from the repo root and use `./recon` in all examples below. Only if you explicitly make it global (see the end of this help) can you omit the `./` prefix.
+
+──────────────────────────────── Core ────────────────────────────────
+• Health check
+  ./recon doctor
+
+• Run (interactive prompts)
+  ./recon run -i --out runs --tag <label>
+
+• Run (from a scope file)
+  ./recon run --scope scope.yaml --out runs --tag <label>
+
+• Diff two runs
+  ./recon diff --a runs/run-OLD --b runs/run-NEW --out runs/diff.md
+
+──────────────────────── New Opt-In Flags (Speed & Visibility) ────────────────────────
+• Verbose progress
+  -v / --verbose — live spinner + periodic progress (heartbeats).
+
+• DNS fast path (A/AAAA only)
+  --dns-fast — only A and AAAA records are stored (faster I/O + less query volume).
+
+• Skip internal-looking hosts
+  --skip-internal — ignores internal-looking names (e.g., *.corp.*, .internal, .local, .lan).
+
+• Parallel DNS workers
+  --dns-workers N — run DNS lookups in parallel (e.g., 10–50).
+  Default behavior is unchanged unless you opt in.
+
+Tip: when you don’t use any speed flags, the CLI hints:
+“Tip: for faster results, try --dns-fast, --skip-internal, or --dns-workers N.”
+
+──────────────────────────── Ready-Made Run Recipes ────────────────────────────
+• Normal (baseline, comprehensive)
+  ./recon run -i --out runs --tag normal
+
+• Normal + visibility (no speed change)
+  ./recon run -i -v --out runs --tag vis
+
+• DNS fast path + concurrency (keep everything in scope)
+  ./recon run -i -v --dns-fast --dns-workers 20 --out runs --tag turbo
+
+• Turbo + skip internal-looking (fastest on large orgs)
+  ./recon run -i -v --dns-fast --skip-internal --dns-workers 20 --out runs --tag turbo-skip
+
+• Scoped file + speed flags (skip prompts)
+  ./recon run --scope scope.yaml -v --dns-fast --dns-workers 20 --out runs --tag scoped-fast
+
+────────────────────────── Opening Reports (Newest or Specific) ─────────────────────────
+• Open the newest HTML casefile — default browser (preferred)
+  xdg-open "$(ls -td runs/* | head -1)/casefile.html"
+
+• Open the newest HTML casefile — Firefox explicitly
+  firefox --new-window "$(ls -td runs/* | head -1)/casefile.html"
+
+• Open the newest Markdown casefile
+  xdg-open "$(ls -td runs/* | head -1)/casefile.md"
+  # or:
+  less "$(ls -td runs/* | head -1)/casefile.md"
+
+• Work with a specific run
+  RUN="runs/run-YYYYMMDD-HHMMSSZ[-tag]"
+  xdg-open "$RUN/casefile.html"
+  # artifacts folder:
+  ls -lh "$RUN/artifacts"
+
+──────────────────────── Helpful “During Run” & Diagnostics ────────────────────────
+• Watch newest run’s artifacts appear/grow
+  watch -n 1 -d 'ls -lh "$(ls -td runs/* | head -1)"/artifacts'
+
+• Time a run (wall/CPU/RSS)
+  /usr/bin/time -f 'Elapsed: %E  CPU: %P  RSS: %M KB' ./recon run -i --out runs --tag bench
+
+• Measure DNS phase duration (newest run)
+  RUN="$(ls -td runs/* | head -1)"
+  CT_TS=$(stat -c %Y "$RUN/artifacts/ct_*.json" | head -1)
+  DNS_TS=$(stat -c %Y "$RUN/artifacts/dns_records.json")
+  echo "$((DNS_TS-CT_TS)) seconds"
+
+• Diff two runs (what’s new/removed)
+  ./recon diff --a runs/run-OLD --b runs/run-NEW --out runs/diff.md
+  xdg-open runs/diff.md
+
+────────────────────── Make `recon` Globally Available (no `./`) ──────────────────────
+This is optional, but a nice QoL improvement. After this, you can type `recon` from any directory.
+
+• Per-user symlink into ~/.local/bin (recommended)
+  mkdir -p ~/.local/bin
+  ln -sf "$(pwd)/recon" ~/.local/bin/recon
+  # ensure ~/.local/bin is on PATH for your shell:
+  grep -q 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc || \
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+  source ~/.bashrc
+  # now you can run globally:
+  recon doctor
+
+  # undo:
+  rm -f ~/.local/bin/recon
+
+• Temporary PATH for current shell (session-only)
+  export PATH="$(pwd):$PATH"
+  recon doctor
+
+Keep the symlink pointing at your dev-box repo. If you move the repo folder, update or recreate the link.
+
+──────────────────────────── Troubleshooting (Fast Answers) ───────────────────────────
+• “recon: command not found” → use ./recon from repo root, or add the symlink above.
+• “ModuleNotFoundError: typer” → run via the project’s venv (./setup_venv.sh again if needed).
+• “Run finished too fast / 0 hosts” → -v will show if crt.sh returned 503. Re-try when:
+  curl -s -o /dev/null -w '%{http_code}\n' 'https://crt.sh/?q=%25.google.com&output=json'
+  returns 200.
+• DNS feels slow → try --dns-workers 20 and/or --dns-fast. Keep default for full coverage runs.
+"""
+
+console = Console()
+
+def _stamp() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
 
 
 def _list_runs(out_dir: Path):
@@ -79,27 +210,72 @@ def _compute_delta(current_artifacts: Path, out_dir: Path):
     }
 
 
-app = typer.Typer(help="ReconPilot v0 — Passive-first recon autopilot")
-console = Console()
+def _setup_logging(verbose: bool):
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(level=level, format="%(message)s")
 
 
-def _stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+def _looks_internal(host: str) -> bool:
+    """
+    Heuristic for internal-looking hosts.
+    Conservative defaults: match *.corp.* or obvious internal suffixes.
+    (Skipped only when --skip-internal is set.)
+    """
+    h = host.lower()
+    if ".corp." in h:
+        return True
+    if h.endswith(".internal") or h.endswith(".local") or h.endswith(".lan"):
+        return True
+    return False
 
 
-@app.command()
+def _filter_records_dns_fast(records: Dict[str, list]) -> Dict[str, list]:
+    """Keep only A/AAAA when --dns-fast is set (output-only fast path)."""
+    return {k: v for k, v in records.items() if k in ("A", "AAAA") and v}
+
+
+def _dns_worker(host: str, resolvers: List[str]) -> Tuple[str, Dict[str, list]]:
+    """Call the existing query_dns for a single host (worker wrapper)."""
+    recs = query_dns(host, resolvers)
+    return host, recs
+
+
+app = typer.Typer(
+    help=APP_HELP,
+    add_completion=False,
+    no_args_is_help=True,
+    rich_markup_mode="markdown",
+)
+
+
+@app.command(help="Run passive recon against the defined scope.")
 def run(
     scope: Optional[Path] = typer.Option(
         None,
         exists=False,
         readable=False,
-        help="Path to scope.yaml (or use -i/--interactive to enter values)",
+        help="Path to scope.yaml (or use -i/--interactive to enter values).",
     ),
-    out: Path = typer.Option(Path("runs"), help="Output directory base"),
-    tag: str = typer.Option("", help="Optional run tag, appended to run folder name"),
-    interactive: bool = typer.Option(False, "--interactive", "-i", help="Prompt for scope values (org, domains, seeds, resolvers)"),
+    out: Path = typer.Option(Path("runs"), help="Output directory base."),
+    tag: str = typer.Option("", help="Optional run tag, appended to run folder name."),
+    interactive: bool = typer.Option(
+        False, "--interactive", "-i", help="Prompt for scope values (org, domains, seeds, resolvers)."
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Show detailed progress messages (spinner + periodic counters)."
+    ),
+    dns_fast: bool = typer.Option(
+        False, "--dns-fast", help="(Opt-in) Query only A/AAAA records for faster results."
+    ),
+    skip_internal: bool = typer.Option(
+        False, "--skip-internal", help="(Opt-in) Skip internal-looking hosts (e.g., *.corp.*, .internal, .local, .lan)."
+    ),
+    dns_workers: int = typer.Option(
+        0, "--dns-workers", help="(Opt-in) Parallel DNS worker threads (e.g., 10–50). Default 0/1 = serial."
+    ),
 ):
-    """Run passive recon against the defined scope."""
+    _setup_logging(verbose)
+
     # Build Scope from prompts if interactive; otherwise load from YAML path.
     if interactive:
         org = typer.prompt("Organization", default="Local Lab")
@@ -141,9 +317,14 @@ def run(
     console.print(f"[bold]Org:[/] {scope_obj.org}")
     console.print(f"[bold]Domains:[/] {', '.join(scope_obj.domains)}\n")
 
+    # Hint only when user didn't opt-in to any speed-ups
+    if not (dns_fast or skip_internal or (dns_workers and dns_workers > 1)):
+        console.print("[dim]Tip: for faster results, try --dns-fast, --skip-internal, or --dns-workers N.[/dim]")
+
     all_hosts: Set[str] = set()
 
     # 1) CT discovery
+    logging.info("CT: starting certificate transparency discovery...")
     for base in scope_obj.domains:
         console.print(f"[cyan]ct:[/] querying crt.sh for {base}...")
         hosts = fetch_ct_domains(base)
@@ -151,6 +332,7 @@ def run(
         console.print(f"  found {len(hosts)} hosts in-scope")
         write_json(artifacts_dir / f"ct_{base}.json", hosts)
         all_hosts.update(hosts)
+    logging.info("CT: done.")
 
     # Include seed hosts from scope (filtered to in-scope)
     seed_hosts = {h.strip().lower() for h in scope_obj.seeds.get("hosts", []) if h.strip()}
@@ -158,22 +340,66 @@ def run(
     all_hosts.update(seed_hosts)
     write_json(artifacts_dir / "seed_hosts.json", sorted(list(seed_hosts)))
 
+    # Optional host filtering (skip internal-looking hosts) — opt-in only
+    if skip_internal:
+        before = len(all_hosts)
+        all_hosts = {h for h in all_hosts if not _looks_internal(h)}
+        skipped = before - len(all_hosts)
+        logging.info(f"Scope filter: skipped {skipped} internal-looking host(s).")
+
     all_hosts = sorted(all_hosts)
     write_json(artifacts_dir / "inventory_hosts.json", all_hosts)
 
     # 2) DNS records
-    inventory = []
-    dns_issues = []
-    for h in all_hosts:
+    logging.info("DNS: starting resolution pipeline...")
+    inventory: List[Dict[str, object]] = []
+    dns_issues: List[Dict[str, object]] = []
+
+    def _process_host(h: str) -> Tuple[str, Dict[str, list], Optional[dict]]:
         recs = query_dns(h, scope_obj.resolvers)
-        inventory.append({"host": h, "records": recs})
+        if dns_fast:
+            recs = _filter_records_dns_fast(recs)
+
+        issue = None
         # simple heuristics for potential dangling CNAMEs
-        if any(v for v in recs.get("CNAME", []) if any(s in v.lower() for s in ["amazonaws.com","github.io","herokuapp.com","azurewebsites.net"])):
-            dns_issues.append({"host": h, "type": "dangling_cname_potential", "evidence": recs.get("CNAME", [])})
+        if any(
+            v
+            for v in recs.get("CNAME", [])
+            if any(s in v.lower() for s in ["amazonaws.com", "github.io", "herokuapp.com", "azurewebsites.net"])
+        ):
+            issue = {"host": h, "type": "dangling_cname_potential", "evidence": recs.get("CNAME", [])}
+        return h, recs, issue
+
+    if dns_workers and dns_workers > 1:
+        logging.info(f"DNS: parallel mode enabled with {dns_workers} worker(s).")
+        with console.status("Resolving DNS (parallel)…", spinner="dots"):
+            with ThreadPoolExecutor(max_workers=dns_workers) as ex:
+                futures = {ex.submit(_process_host, h): h for h in all_hosts}
+                done = 0
+                for fut in as_completed(futures):
+                    h, recs, issue = fut.result()
+                    inventory.append({"host": h, "records": recs})
+                    if issue:
+                        dns_issues.append(issue)
+                    done += 1
+                    if verbose and (done % 25 == 0):
+                        logging.debug(f"DNS progress: {done}/{len(all_hosts)} hosts")
+    else:
+        with console.status("Resolving DNS…", spinner="dots"):
+            for idx, h in enumerate(all_hosts, 1):
+                h, recs, issue = _process_host(h)
+                inventory.append({"host": h, "records": recs})
+                if issue:
+                    dns_issues.append(issue)
+                if verbose and (idx % 25 == 0):
+                    logging.debug(f"DNS progress: {idx}/{len(all_hosts)} hosts")
+
     write_json(artifacts_dir / "dns_records.json", inventory)
     write_json(artifacts_dir / "dns_issues.json", dns_issues)
+    logging.info("DNS: done.")
 
     # 3) Findings: map to rules/explanations (with safe fallback)
+    logging.info("Findings: analyzing artifacts…")
     try:
         rules = load_rules(Path(__file__).parent / "rules" / "recon_rules.yaml")
     except FileNotFoundError:
@@ -203,7 +429,7 @@ def run(
             "next_steps": rule.get("next_steps", [])
         })
 
-    # Inventory summary lines
+    # Inventory summary lines (respect dns_fast output)
     inv_summary = []
     for item in inventory:
         host = item["host"]
@@ -225,6 +451,7 @@ def run(
     }
 
     # 5) Render casefile (Markdown + HTML)
+    logging.info("Render: generating casefile.md…")
     context = {
         "org": scope_obj.org,
         "run_time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -240,7 +467,7 @@ def run(
     with open(run_dir / "casefile.md", "w", encoding="utf-8") as f:
         f.write(report_md)
 
-    # write HTML alongside the Markdown
+    logging.info("Render: generating casefile.html…")
     write_casefile_html(run_dir / "casefile.html", template_dir, context)
 
     console.print(f"\n[green]✔[/] Wrote artifacts → {artifacts_dir}")
@@ -248,20 +475,18 @@ def run(
     console.print(f"[green]✔[/] Wrote HTML → {run_dir / 'casefile.html'}")
     if delta["prev_run"]:
         console.print(
-            f"[bold]Δ since {delta['prev_run']}:[/] "
-            f"+{delta['counts']['new']} new, -{delta['counts']['removed']} removed"
+            f"[bold]Δ since {delta['prev_run']}:[/] +{delta['counts']['new']} new, -{delta['counts']['removed']} removed"
         )
     else:
         console.print(f"[bold]Δ:[/] first run — no prior data")
 
 
-@app.command()
+@app.command(help="Diff two runs to see what's new/removed.")
 def diff(
-    a: Path = typer.Option(..., exists=True, help="Path to older run dir"),
-    b: Path = typer.Option(..., exists=True, help="Path to newer run dir"),
-    out: Path = typer.Option(Path("diff.md"), help="Output markdown path"),
+    a: Path = typer.Option(..., exists=True, help="Path to older run dir."),
+    b: Path = typer.Option(..., exists=True, help="Path to newer run dir."),
+    out: Path = typer.Option(Path("diff.md"), help="Output markdown path."),
 ):
-    """Diff two runs to see what's new/removed."""
     hosts_a = set(read_json(a / "artifacts" / "inventory_hosts.json"))
     hosts_b = set(read_json(b / "artifacts" / "inventory_hosts.json"))
     new = sorted(list(hosts_b - hosts_a))

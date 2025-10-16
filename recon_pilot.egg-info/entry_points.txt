@@ -1,2 +1,0 @@
-[console_scripts]
-recon-pilot = recon_pilot.cli:app

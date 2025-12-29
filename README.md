@@ -79,7 +79,7 @@ This project is a **passive-first reconnaissance helper** intended for **lawful 
 
 By using this project, you acknowledge and agree to the above.
 
-➡️ **Read the full [DISCLAIMER & Acceptable Use](./DISCLAIMER.md).**
+**Read the full [DISCLAIMER & Acceptable Use](./DISCLAIMER.md).**
 
 ## Community Note from the Maintainer
 
